@@ -4,7 +4,6 @@
 # Copyright © 2016 Peng Liu <myme5261314@gmail.com>
 #
 # Distributed under terms of the gplv3 license.
-
 """
 
 """
@@ -17,9 +16,7 @@ import logging
 import concurrent
 
 
-
 def main():
-    # asyncio.BaseEventLoop.set_debug(True)
     # logging.basicConfig(level=logging.DEBUG)
     try:
         fetched_pool = asyncio.Queue(10)
@@ -29,7 +26,8 @@ def main():
         loop = asyncio.get_event_loop()
         loop.run_until_complete(tasks)
     except KeyboardInterrupt as e:
-        print("Caught keyboard interrupt. Canceling %d tasks..." % len([_ for _ in asyncio.Task.all_tasks() if not _.done()]))
+        print("Caught keyboard interrupt. Canceling %d tasks..." %
+              len([_ for _ in asyncio.Task.all_tasks() if not _.done()]))
         for task in asyncio.Task.all_tasks():
             if not task.cancelled():
                 task.cancel()
