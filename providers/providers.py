@@ -20,6 +20,7 @@ from html import unescape
 from base64 import b64decode
 from urllib.parse import unquote, urlparse
 import logging
+import concurrent
 
 import aiohttp
 
@@ -67,7 +68,7 @@ class Provider:
 
     _pattern = IPPortPatternGlobal
 
-    def __init__(self, pool, url=None, proto=(), max_conn=4,
+    def __init__(self, pool, proxy_set=None, url=None, proto=(), max_conn=4,
                  max_tries=3, timeout=20, loop=None):
         self.pool = pool
         if url:
@@ -77,7 +78,7 @@ class Provider:
         self.proto = proto
         self._max_tries = max_tries
         self._timeout = timeout
-        self.fetched_proxies = set()
+        self.fetched_proxies = proxy_set or set()
         # concurrent connections on the current provider
         self._loop = loop or asyncio.get_event_loop()
         self.session = aiohttp.ClientSession()
@@ -85,10 +86,19 @@ class Provider:
         self.proxy_session = aiohttp.ClientSession(connector=conn)
         self.max_conn = max_conn
         self.blocked = False
+        self.consume_tasks = []
+        self.produce_url_task = None
 
     def __del__(self):
         self.session.close()
         self.proxy_session.close()
+
+    def stop(self):
+        if self.produce_url_task and not self.produce_url_task.done():
+            self.produce_url_task.cancel()
+        for task in self.consume_tasks:
+            if not task.done():
+                task.cancel()
 
     async def loop_fetch_proxies(self):
         """Receive proxies from the provider and return them.
@@ -96,30 +106,33 @@ class Provider:
         :return: :attr:`.proxies`
         """
         logging.debug('Try to get proxies from %s' % self.domain)
-        produce_url_task = asyncio.ensure_future(self.gen_urls(self.url))
-        consume_tasks = []
+        self.produce_url_task = asyncio.ensure_future(self.gen_urls(self.url))
         while True:
             try:
-                if len(consume_tasks) <= self.max_conn:
+                while len(self.consume_tasks) <= self.max_conn:
                     url = await self.url_pool.get()
                     task = asyncio.ensure_future(self.fetch_on_page(url))
-                    consume_tasks.append(task)
-                else:
-                    consume_tasks = list(filter(lambda t: not t.done(), consume_tasks))
-                    if consume_tasks:
-                        await asyncio.sleep(10)
+                    self.consume_tasks.append(task)
+                self.consume_tasks = list(filter(lambda t: not t.done(), self.consume_tasks))
+                if self.consume_tasks:
+                    await asyncio.sleep(10)
+            except concurrent.futures.CancelledError as e:
+                logging.debug("%s canceled from working." % (self.__class__.__name__))
+                break;
             except (Exception) as e:
-                logging.error(e)
+                logging.error("Loop for %s error with %s.%s" % (self.__class__.__name__, e, type(e)))
                 break;
                 # return [self.fetch_on_page(url) for url in self.url2urls(self.url)]
 
     async def gen_urls(self, url):
-        while True:
-            if self.url_pool.empty():
-                for _ in await self.url2urls(url):
-                    print(_)
-                    await self.url_pool.put(_)
-            await asyncio.sleep(1)
+        try:
+            while True:
+                if self.url_pool.empty():
+                    for _ in await self.url2urls(url):
+                        await self.url_pool.put(_)
+                await asyncio.sleep(1)
+        except KeyboardInterrupt as e:
+            raise e
 
     async def url2urls(self, url):
         if url is None:
@@ -127,23 +140,28 @@ class Provider:
         return [url]
 
     async def fetch_on_page(self, url, data=None, headers=None, method='GET'):
-        if isinstance(url, dict):
-            data = url.get("data")
-            headers = url.get("headers")
-            method = url.get("method") or "GET"
-            url = url.get("url")
-        page = await self.get(url, data=data, headers=headers, method=method)
         try:
+            if isinstance(url, dict):
+                data = url.get("data")
+                headers = url.get("headers")
+                method = url.get("method") or "GET"
+                url = url.get("url")
+            page = await self.get(url, data=data, headers=headers, method=method)
+            # try:
             received = self.find_proxies(page)
+            # except Exception as e:
+            #     received = []
+            #     logging.error('Error when executing find_proxies.'
+                          # 'Domain: %s; Error: %r' % (self.domain, e))
+            for proxy in received:
+                if proxy[1] != "" and proxy not in self.fetched_proxies:
+                    self.fetched_proxies.add(proxy)
+                    await self.pool.put(proxy)
+                    logging.info(str(proxy) + "from " + url)
+        except concurrent.futures.CancelledError as e:
+            logging.debug("Cancelled with %s." % (url))
         except Exception as e:
-            received = []
-            logging.error('Error when executing find_proxies.'
-                      'Domain: %s; Error: %r' % (self.domain, e))
-        for proxy in received:
-            if proxy[1] != "" and proxy not in self.fetched_proxies:
-                self.fetched_proxies.add(proxy)
-                await self.pool.put(proxy)
-                logging.error(str(proxy) + "from " + url)
+            logging.error("%s in fetch_on_page, error with %s." % (type(e), e))
 
     async def get(self, url, data=None, headers=None, method='GET'):
         for _ in range(self._max_tries):
@@ -173,6 +191,8 @@ class Provider:
                     aiohttp.ClientOSError, aiohttp.ClientResponseError,
                     aiohttp.ServerDisconnectedError) as e:
                 logging.error('%s is failed. Error: %r;' % (url, e))
+            except KeyboardInterrupt as e:
+                raise e
         if page == "":
             try:
                 with aiohttp.Timeout(self._timeout, loop=self._loop):
@@ -190,6 +210,8 @@ class Provider:
                     aiohttp.ClientOSError, aiohttp.ClientResponseError,
                     aiohttp.ServerDisconnectedError) as e:
                 logging.error('%s is failed. Error: %r;' % (url, e))
+            except KeyboardInterrupt as e:
+                raise e
         return page
 
     def find_proxies(self, page):
@@ -234,7 +256,7 @@ class Blogspot_com_base(BlockedProvider):
         urls = set()
         for task in asyncio.as_completed([self.get("http://%s/" % d) for d in self.domains]):
             page = await task
-            urls += set(re.findall(exp, page))
+            urls.union(set(re.findall(exp, page)))
         return list(urls)
 
 
