@@ -158,10 +158,13 @@ class Provider:
             #     LOG.error('Error when executing find_proxies.'
                           # 'Domain: %s; Error: %r' % (self.domain, e))
             for proxy in received:
-                if proxy[1] != "" and proxy not in self.fetched_proxies:
-                    self.fetched_proxies.add(proxy)
-                    await self.pool.put(proxy)
-                    LOG.debug(str(proxy) + "from " + url)
+                with await asyncio.Lock():
+                    if proxy[0] == "127.0.0.1":
+                        continue
+                    if proxy[1] != "" and proxy not in self.fetched_proxies:
+                        self.fetched_proxies.add(proxy)
+                        await self.pool.put(proxy)
+                        LOG.debug(str(proxy) + "from " + url)
         except concurrent.futures.CancelledError as e:
             LOG.debug("Cancelled with %s." % (url))
         except Exception as e:
