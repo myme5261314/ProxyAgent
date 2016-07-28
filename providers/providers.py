@@ -28,7 +28,9 @@ import aiohttp
 # from .utils import log, get_headers, IPPattern, IPPortPatternGlobal
 # from .resolver import Resolver
 
-headers = {
+LOG = logging.getLogger(__name__)
+
+v_headers = {
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
     "Accept-Encoding": "gzip, deflate, sdch",
     "Accept-Language": "zh-CN,zh;q=0.8,en;q=0.6",
@@ -105,7 +107,7 @@ class Provider:
 
         :return: :attr:`.proxies`
         """
-        logging.debug('Try to get proxies from %s' % self.domain)
+        LOG.debug('Try to get proxies from %s' % self.domain)
         self.produce_url_task = asyncio.ensure_future(self.gen_urls(self.url))
         while True:
             try:
@@ -115,12 +117,12 @@ class Provider:
                     self.consume_tasks.append(task)
                 self.consume_tasks = list(filter(lambda t: not t.done(), self.consume_tasks))
                 if self.pool.full() or self.consume_tasks:
-                    await asyncio.sleep(10)
+                    await asyncio.sleep(1)
             except concurrent.futures.CancelledError as e:
-                logging.debug("%s canceled from working." % (self.__class__.__name__))
+                LOG.debug("%s canceled from working." % (self.__class__.__name__))
                 break;
             except (Exception) as e:
-                logging.error("Loop for %s error with %s.%s" % (self.__class__.__name__, e, type(e)))
+                LOG.error("Loop for %s error with %s.%s" % (self.__class__.__name__, e, type(e)))
                 break;
                 # return [self.fetch_on_page(url) for url in self.url2urls(self.url)]
 
@@ -153,17 +155,17 @@ class Provider:
             received = self.find_proxies(page)
             # except Exception as e:
             #     received = []
-            #     logging.error('Error when executing find_proxies.'
+            #     LOG.error('Error when executing find_proxies.'
                           # 'Domain: %s; Error: %r' % (self.domain, e))
             for proxy in received:
                 if proxy[1] != "" and proxy not in self.fetched_proxies:
                     self.fetched_proxies.add(proxy)
                     await self.pool.put(proxy)
-                    logging.info(str(proxy) + "from " + url)
+                    LOG.debug(str(proxy) + "from " + url)
         except concurrent.futures.CancelledError as e:
-            logging.debug("Cancelled with %s." % (url))
+            LOG.debug("Cancelled with %s." % (url))
         except Exception as e:
-            logging.error("%s in fetch_on_page, error with %s." % (type(e), e))
+            LOG.error("%s in fetch_on_page, error with %s." % (type(e), e))
 
     async def get(self, url, data=None, headers=None, method='GET'):
         for _ in range(self._max_tries):
@@ -174,6 +176,8 @@ class Provider:
 
     async def _get(self, url, data=None, headers=None, method='GET'):
         page = ''
+        if not headers:
+            headers=v_headers
         if not self.blocked:
             try:
                 with aiohttp.Timeout(self._timeout, loop=self._loop):
@@ -183,7 +187,7 @@ class Provider:
                             page = await resp.text()
                         else:
                             error_page = await resp.text()
-                            logging.error('url: %s\nheaders: %s\ncookies: %s\nstatus_code:%d\npage:\n%s' % (
+                            LOG.error('url: %s\nheaders: %s\ncookies: %s\nstatus_code:%d\npage:\n%s' % (
                                       url, resp.headers, resp.cookies, resp.status, error_page))
                             if resp.status in range(500, 510):
                                 await asyncio.sleep(3)
@@ -192,7 +196,7 @@ class Provider:
             except (UnicodeDecodeError, asyncio.TimeoutError,
                     aiohttp.ClientOSError, aiohttp.ClientResponseError,
                     aiohttp.ServerDisconnectedError) as e:
-                logging.error('%s is failed. Error: %r;' % (url, e))
+                LOG.warning('%s is failed. Error: %r;' % (url, e))
             except KeyboardInterrupt as e:
                 raise e
         if page == "":
@@ -203,7 +207,7 @@ class Provider:
                             page = await resp.text()
                         else:
                             error_page = await resp.text()
-                            logging.error('url: %s\nheaders: %s\ncookies: %s\nstatus_code:%d\npage:\n%s' % (
+                            LOG.error('url: %s\nheaders: %s\ncookies: %s\nstatus_code:%d\npage:\n%s' % (
                                       url, resp.headers, resp.cookies, resp.status, error_page))
                             if resp.status in range(500, 510):
                                 await asyncio.sleep(3)
@@ -211,7 +215,7 @@ class Provider:
             except (UnicodeDecodeError, asyncio.TimeoutError,
                     aiohttp.ClientOSError, aiohttp.ClientResponseError,
                     aiohttp.ServerDisconnectedError) as e:
-                logging.error('%s is failed. Error: %r;' % (url, e))
+                LOG.error('%s is failed. Error: %r;' % (url, e))
             except KeyboardInterrupt as e:
                 raise e
         return page
@@ -537,7 +541,7 @@ class Nntime_com(Provider):
         return urls
 
 
-class Proxynova_com(Provider):
+class Proxynova_com(BlockedProvider):
     domain = 'proxynova.com'
 
     async def url2urls(self, url):
@@ -549,7 +553,7 @@ class Proxynova_com(Provider):
         return urls
 
 
-class Spys_ru(Provider):
+class Spys_ru(BlockedProvider):
     domain = 'spys.ru'
     charEqNum = {}
 
@@ -589,7 +593,7 @@ class Spys_ru(Provider):
                 'xf1': None}       # 1 = ANM & HIA; 3 = ANM; 4 = HIA
         method = 'POST'
         urls = [{'url': url, 'data': {**data, 'xf1': lvl},
-                 'method': method} for lvl in [3, 4]]
+                 'method': method, "headers": v_headers} for lvl in [3, 4]]
         return urls
         # expCountries = r'>([A-Z]{2})<'
         # url = 'http://spys.ru/proxys/'
@@ -694,8 +698,8 @@ class Kuaidaili(Provider):
     domain = "kuaidaili.com"
 
     async def url2urls(self, url):
-        urls = ["http://www.kuaidaili.com/free/inha/%d" % n for n in range(1, 21)]
-        urls += ["http://www.kuaidaili.com/free/outha/%d" % n for n in range(1, 21)]
+        urls = [{"url": "http://www.kuaidaili.com/free/inha/%d" % n, "headers": v_headers} for n in range(1, 21)]
+        urls += [{"url": "http://www.kuaidaili.com/free/outha/%d" % n, "headers": v_headers} for n in range(1, 21)]
         return urls
 
 
@@ -703,8 +707,8 @@ class Xicidaili(Provider):
     domain = "xicidaili.com"
 
     async def url2urls(self, url):
-        urls = [{"url": "http://www.xicidaili.com/nn/%d" % n, "headers": headers} for n in range(1, 21)]
-        urls += [{"url": "http://www.xicidaili.com/wn/%d" % n, "headers": headers} for n in range(1, 21)]
+        urls = [{"url": "http://www.xicidaili.com/nn/%d" % n, "headers": v_headers} for n in range(1, 21)]
+        urls += [{"url": "http://www.xicidaili.com/wn/%d" % n, "headers": v_headers} for n in range(1, 21)]
         return urls
 
 # Need reptcha verify.

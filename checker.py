@@ -18,6 +18,8 @@ import aiohttp
 import logging
 import traceback
 
+LOG = logging.getLogger(__name__)
+
 checker_pages = [
         # 'http://httpbin.org/get?show_env',
         'https://httpbin.org/get?show_env',
@@ -28,6 +30,11 @@ checker_pages = [
         # 'http://ip.spys.ru/', 'http://www.ingosander.net/azenv.php',
         # 'http://www.proxy-listen.de/azenv.php',
         'https://www.proxy-listen.de/azenv.php',
+        "https://userpage.fu-berlin.de/benutzer/env.cgi",
+        "https://proxyjudge.info/",
+        # "https://bromargo.pl/azenv.php",
+        "https://www.omgwallhack.org/toys/env.cgi",
+        # "https://www.nucleoproducoes.com.br/1/azenv.php",
 ]
 
 IPPattern = re.compile(
@@ -57,7 +64,7 @@ def reslove_ext_ip(retry_times=10):
                 content = response.text
                 return re.findall(IPPattern, content)[0]
         except Exception as e:
-            logging.warning("Raw IP reslove failed. %s:%s" % (type(e), e))
+            LOG.warning("Raw IP reslove failed. %s:%s" % (type(e), e))
             return None
 
 class Checker(object):
@@ -91,9 +98,9 @@ class Checker(object):
             result = await self.check_proxy(proxy)
             if result:
                 await self.out_pool.put(proxy)
-                logging.info("check proxy %s:%s successfully." % (ip, port))
+                LOG.info("check proxy %s:%s successfully." % (ip, port))
             else:
-                logging.info("check proxy %s:%s Failed." % (ip, port))
+                LOG.debug("check proxy %s:%s Failed." % (ip, port))
 
 
     async def check_proxy(self, proxy):
@@ -109,17 +116,17 @@ class Checker(object):
                         async with sess.get(verify_url) as resp:
                             content = await resp.text()
                             if not resp.status == 200:
-                                logging.debug("Failed verify proxy %s:%s with %s, status_code %d, reason: %s, content: %s" % (ip, port, verify_url, resp.status, resp.reason, content))
+                                LOG.debug("Failed verify proxy %s:%s with %s, status_code %d, reason: %s, content: %s" % (ip, port, verify_url, resp.status, resp.reason, content))
                                 continue
                             if not str(v) in content:
-                                logging.debug("%s:%s, No random number verified on response." % (ip, port))
+                                LOG.debug("%s:%s, No random number verified on response." % (ip, port))
                                 return False
                             if self.ext_ip in content:
-                                logging.debug("%s:%s, Raw IP appear in the response." % (ip, port))
+                                LOG.debug("%s:%s, Raw IP appear in the response." % (ip, port))
                                 return False
-                            print(content)
+                            # print(content)
                             return True
             except (aiohttp.errors.DisconnectedError, aiohttp.errors.HttpProcessingError, aiohttp.errors.ClientError, asyncio.TimeoutError) as e:
-                logging.debug("Failed verify proxy %s:%s, get %s, %s" % (ip, port, type(e), e))
+                LOG.debug("Failed verify proxy %s:%s, get %s, %s" % (ip, port, type(e), e))
                 pass
         return False
