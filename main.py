@@ -19,9 +19,10 @@ import checker
 
 def main():
     logging.basicConfig(level=logging.INFO)
+    # logging.basicConfig(level=logging.DEBUG)
     try:
-        fetched_pool = asyncio.Queue(20)
-        checked_pool = asyncio.Queue(10)
+        fetched_pool = asyncio.Queue(200)
+        checked_pool = asyncio.Queue(100)
         fetched_set = set()
         loop = asyncio.get_event_loop()
         providers = utils.gen_prv(fetched_pool, fetched_set)
@@ -41,7 +42,9 @@ def main():
         for task in asyncio.Task.all_tasks():
             try:
                 if not task.cancelled():
-                    task.exception()
+                    e = task.exception()
+                    if e:
+                        print(e)
             except concurrent.futures.CancelledError as e:
                 pass
         loop.stop()
