@@ -114,7 +114,7 @@ class Provider:
                     task = asyncio.ensure_future(self.fetch_on_page(url))
                     self.consume_tasks.append(task)
                 self.consume_tasks = list(filter(lambda t: not t.done(), self.consume_tasks))
-                if self.consume_tasks:
+                if self.pool.full() or self.consume_tasks:
                     await asyncio.sleep(10)
             except concurrent.futures.CancelledError as e:
                 logging.debug("%s canceled from working." % (self.__class__.__name__))
@@ -146,6 +146,8 @@ class Provider:
                 headers = url.get("headers")
                 method = url.get("method") or "GET"
                 url = url.get("url")
+            while self.pool.full():
+                await asyncio.sleep(1)
             page = await self.get(url, data=data, headers=headers, method=method)
             # try:
             received = self.find_proxies(page)

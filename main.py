@@ -14,16 +14,22 @@ import aiohttp
 import utils
 import logging
 import concurrent
+import checker
 
 
 def main():
-    # logging.basicConfig(level=logging.DEBUG)
+    logging.basicConfig(level=logging.INFO)
     try:
-        fetched_pool = asyncio.Queue(10)
+        fetched_pool = asyncio.Queue(20)
+        checked_pool = asyncio.Queue(10)
         fetched_set = set()
+        loop = asyncio.get_event_loop()
         providers = utils.gen_prv(fetched_pool, fetched_set)
         tasks = asyncio.wait([_.loop_fetch_proxies() for _ in providers])
-        loop = asyncio.get_event_loop()
+        ext_ip = checker.reslove_ext_ip()
+        print(ext_ip)
+        c = checker.Checker(fetched_pool, checked_pool, ext_ip)
+        c.check()
         loop.run_until_complete(tasks)
     except KeyboardInterrupt as e:
         print("Caught keyboard interrupt. Canceling %d tasks..." %
